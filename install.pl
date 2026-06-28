@@ -7,15 +7,16 @@ main :-
     halt(0).
 
 ensure_all_files :-
-    forall(file(Path, Command), ensure_file(Path, Command)).
+    forall(file(Path, Actions), ensure_file(Path, Actions)).
 
 ensure_all_installed :-
-    forall(installed(Name, Command), ensure_installed(Name, Command)).
+    forall(installed(Name, Actions), ensure_installed(Name, Actions)).
 
-ensure_installed(Name, _Command) :-
+ensure_installed(Name, _Actions) :-
     check_installed(Name), !,
     report(ok, Name, installed).
-ensure_installed(Name, Command) :-
+ensure_installed(Name, Actions) :-
+    shell_script(Actions, Command),
     report(run, Name, Command),
     shell(Command, Status),
     (   Status =:= 0,
@@ -25,10 +26,11 @@ ensure_installed(Name, Command) :-
         halt(1)
     ).
 
-ensure_file(Path, _Command) :-
+ensure_file(Path, _Actions) :-
     exists_file(Path), !,
     report(ok, Path, present).
-ensure_file(Path, Command) :-
+ensure_file(Path, Actions) :-
+    shell_script(Actions, Command),
     report(run, Path, Command),
     shell(Command, Status),
     (   Status =:= 0,
@@ -37,6 +39,25 @@ ensure_file(Path, Command) :-
     ;   report(fail, Path, missing),
         halt(1)
     ).
+
+shell_script(Actions, Command) :-
+    maplist(shell_fragment, Actions, Fragments),
+    atomic_list_concat(Fragments, ' && ', Command).
+
+shell_fragment(copy_file(Source, Target), Command) :-
+    dirname(Target, Dir),
+    atomic_list_concat(['mkdir -p ', Dir, ' && cp ', Source, ' ', Target], Command).
+shell_fragment(copy_tree(Source, Target), Command) :-
+    dirname(Target, Dir),
+    atomic_list_concat(['mkdir -p ', Dir, ' && cp -R ', Source, '/. ', Target, '/'], Command).
+shell_fragment(chmod_exec(Path), Command) :-
+    atomic_list_concat(['chmod +x ', Path], Command).
+shell_fragment(run(Command), Command).
+
+dirname(Path, Dir) :-
+    atomic_list_concat(Parts, '/', Path),
+    append(DirParts, [_Base], Parts),
+    atomic_list_concat(DirParts, '/', Dir).
 
 check_installed(Name) :-
     atomic_list_concat(['command -v ', Name, ' >/dev/null 2>&1'], Command),
