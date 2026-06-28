@@ -1,6 +1,8 @@
 [tools]
 ast-grep = "latest"
+bat = "latest"
 bun = "latest"
+fd = "latest"
 fnox = "latest"
 fzf = "latest"
 lazygit = "latest"

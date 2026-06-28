@@ -1,3 +1,2 @@
 #!/bin/sh
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec swipl -q -s "$repo_dir/install.pl" -g cli -t halt -- "$@"
+exec swipl -q -s "$HOME/projects/dotfiles/install.pl" -g cli -t halt -- "$@"

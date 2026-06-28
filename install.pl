@@ -208,7 +208,8 @@ run_sync(Message) :-
     ).
 
 in_dotfiles_repo(Goal) :-
-    prolog_load_context(directory, RepoDir),
+    source_file(run_sync(_), SourceFile),
+    file_directory_name(SourceFile, RepoDir),
     working_directory(CurrentDir, RepoDir),
     call_cleanup(Goal, working_directory(_, CurrentDir)).
 
