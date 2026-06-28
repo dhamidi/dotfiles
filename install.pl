@@ -27,14 +27,16 @@ ensure_installed(Name, Actions) :-
     ).
 
 ensure_file(Path, _Actions) :-
-    exists_file(Path), !,
+    expand_file_name(Path, [ExpandedPath]),
+    exists_file(ExpandedPath), !,
     report(ok, Path, present).
 ensure_file(Path, Actions) :-
     shell_script(Actions, Command),
     report(run, Path, Command),
     shell(Command, Status),
     (   Status =:= 0,
-        exists_file(Path)
+        expand_file_name(Path, [ExpandedPath]),
+        exists_file(ExpandedPath)
     ->  report(ok, Path, present)
     ;   report(fail, Path, missing),
         halt(1)
