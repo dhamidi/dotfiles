@@ -24,6 +24,7 @@ dotfiles status    # show desired vs actual state using content hashes
 dotfiles diff      # show system changes compared to the repo
 dotfiles pull      # copy managed system files back into the repo
 dotfiles commit    # pull, stage, and commit managed changes
+dotfiles sync      # same as commit, then git push
 ```
 
 ## Exploring the installer

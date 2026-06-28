@@ -24,6 +24,10 @@ cli([commit]) :-
     run_commit('chore: update dotfiles').
 cli([commit, '-m', Message]) :-
     run_commit(Message).
+cli([sync]) :-
+    run_sync('chore: update dotfiles').
+cli([sync, '-m', Message]) :-
+    run_sync(Message).
 cli([commands]) :-
     print_planned_commands.
 cli([tree]) :-
@@ -192,6 +196,16 @@ run_pull :-
 
 run_commit(Message) :-
     run_pull,
+    stage_and_commit(Message).
+
+run_sync(Message) :-
+    run_commit(Message),
+    shell('git push', PushStatus),
+    ( PushStatus =:= 0 -> report(ok, git, pushed)
+    ; report(fail, git, push), halt(1)
+    ).
+
+stage_and_commit(Message) :-
     shell('git add .', AddStatus),
     ( AddStatus =:= 0 -> true ; report(fail, git, add), halt(1) ),
     shell('git diff --cached --quiet', DiffStatus),
@@ -270,7 +284,7 @@ run_optional(Command) :-
     halt(1).
 
 print_help :-
-    writeln('usage: dotfiles [install|status|diff|pull|commit|commands|tree|help]').
+    writeln('usage: dotfiles [install|status|diff|pull|commit|sync|commands|tree|help]').
 
 report(Status, Subject, Detail) :-
     format('~w ~w ~w~n', [Status, Subject, Detail]),
