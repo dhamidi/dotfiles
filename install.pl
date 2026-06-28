@@ -12,6 +12,46 @@ ensure_all_files :-
 ensure_all_installed :-
     forall(installed(Name, Actions), ensure_installed(Name, Actions)).
 
+planned_command(Target, Command) :-
+    file(Target, Actions),
+    shell_script(Actions, Command).
+planned_command(Name, Command) :-
+    installed(Name, Actions),
+    shell_script(Actions, Command).
+
+desired_file(Path) :-
+    file(Path, _Actions).
+
+desired_tree(Paths) :-
+    findall(Path, desired_file(Path), Paths).
+
+missing_file(Path) :-
+    desired_file(Path),
+    \+ file_present(Path).
+
+present_file(Path) :-
+    desired_file(Path),
+    file_present(Path).
+
+tree_diff(Path, missing) :-
+    missing_file(Path).
+tree_diff(Path, present) :-
+    present_file(Path).
+
+file_present(Path) :-
+    expand_file_name(Path, [ExpandedPath]),
+    exists_file(ExpandedPath).
+
+print_planned_commands :-
+    forall(planned_command(Target, Command),
+           format('~w ~w~n', [Target, Command])).
+
+print_desired_tree :-
+    forall(desired_file(Path), format('~w~n', [Path])).
+
+print_tree_diff :-
+    forall(tree_diff(Path, Status), format('~w ~w~n', [Status, Path])).
+
 ensure_installed(Name, _Actions) :-
     check_installed(Name), !,
     report(ok, Name, installed).
@@ -27,16 +67,14 @@ ensure_installed(Name, Actions) :-
     ).
 
 ensure_file(Path, _Actions) :-
-    expand_file_name(Path, [ExpandedPath]),
-    exists_file(ExpandedPath), !,
+    file_present(Path), !,
     report(ok, Path, present).
 ensure_file(Path, Actions) :-
     shell_script(Actions, Command),
     report(run, action, Command),
     shell(Command, Status),
     (   Status =:= 0,
-        expand_file_name(Path, [ExpandedPath]),
-        exists_file(ExpandedPath)
+        file_present(Path)
     ->  report(ok, Path, present)
     ;   report(fail, Path, missing),
         halt(1)

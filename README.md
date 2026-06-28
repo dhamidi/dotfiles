@@ -14,6 +14,28 @@ make
 
 `make` bootstraps SWI-Prolog if needed, then runs the Prolog installer. The installer copies the managed files into place, runs `agents sync`, and asks mise to install the globally configured tools.
 
+## Exploring the installer
+
+Run SWI-Prolog interactively:
+
+```sh
+swipl -s install.pl
+```
+
+Useful queries:
+
+```prolog
+print_planned_commands.  % show the commands the installer would run
+print_desired_tree.      % show the desired installed file tree
+print_tree_diff.         % show present/missing files on this system
+
+planned_command(Target, Command).
+desired_file(Path).
+missing_file(Path).
+present_file(Path).
+tree_diff(Path, Status).
+```
+
 ## Contents
 
 - `Makefile` — bootstrap entrypoint; ensures `swipl` is available and runs the installer
