@@ -195,15 +195,22 @@ run_pull :-
            )).
 
 run_commit(Message) :-
-    run_pull,
-    stage_and_commit(Message).
+    in_dotfiles_repo((
+        run_pull,
+        stage_and_commit(Message)
+    )).
 
 run_sync(Message) :-
     run_commit(Message),
-    shell('git push', PushStatus),
+    in_dotfiles_repo(shell('git push', PushStatus)),
     ( PushStatus =:= 0 -> report(ok, git, pushed)
     ; report(fail, git, push), halt(1)
     ).
+
+in_dotfiles_repo(Goal) :-
+    prolog_load_context(directory, RepoDir),
+    working_directory(CurrentDir, RepoDir),
+    call_cleanup(Goal, working_directory(_, CurrentDir)).
 
 stage_and_commit(Message) :-
     shell('git add .', AddStatus),
