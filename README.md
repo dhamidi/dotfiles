@@ -20,7 +20,7 @@ make
 After `make`, the repo-managed command is available at `~/.local/bin/dotfiles`:
 
 ```sh
-dotfiles status    # show desired vs actual state
+dotfiles status    # show desired vs actual state using content hashes
 dotfiles diff      # show system changes compared to the repo
 dotfiles pull      # copy managed system files back into the repo
 dotfiles commit    # pull, stage, and commit managed changes

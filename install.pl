@@ -1,3 +1,4 @@
+:- use_module(library(crypto)).
 :- consult('manifest.pl').
 
 main :-
@@ -118,8 +119,46 @@ tree_diff(Path, Status) :-
     state(file(Path), present, Status).
 
 same_file_or_tree(Repo, System) :-
-    shell_script([run_compare(Repo, System)], Command),
-    shell(Command, 0).
+    content_hash(Repo, RepoHash),
+    content_hash(System, SystemHash),
+    RepoHash == SystemHash.
+
+content_hash(Path, Hash) :-
+    expand_file_name(Path, [ExpandedPath]),
+    exists_file(ExpandedPath), !,
+    crypto_file_hash(ExpandedPath, Hash, [algorithm(sha256)]).
+content_hash(Path, Hash) :-
+    expand_file_name(Path, [ExpandedPath]),
+    exists_directory(ExpandedPath),
+    directory_hash(ExpandedPath, Hash).
+
+directory_hash(Dir, Hash) :-
+    directory_files_recursive(Dir, Files),
+    maplist(relative_file_hash(Dir), Files, Pairs),
+    sort(Pairs, SortedPairs),
+    term_string(SortedPairs, Content),
+    crypto_data_hash(Content, Hash, [algorithm(sha256)]).
+
+directory_files_recursive(Dir, Files) :-
+    directory_files(Dir, Entries),
+    findall(File,
+            ( member(Entry, Entries),
+              \+ member(Entry, ['.', '..']),
+              directory_file_path(Dir, Entry, Path),
+              nested_file(Path, File)
+            ),
+            Nested),
+    flatten(Nested, Files).
+
+nested_file(Path, Path) :-
+    exists_file(Path).
+nested_file(Path, Files) :-
+    exists_directory(Path),
+    directory_files_recursive(Path, Files).
+
+relative_file_hash(Dir, File, Relative-Hash) :-
+    relative_file_name(File, Dir, Relative),
+    crypto_file_hash(File, Hash, [algorithm(sha256)]).
 
 file_present(Path) :-
     expand_file_name(Path, [ExpandedPath]),
@@ -211,8 +250,6 @@ shell_fragment(copy_tree(Source, Target), Command) :-
 shell_fragment(chmod_exec(Path), Command) :-
     atomic_list_concat(['chmod +x ', Path], Command).
 shell_fragment(run(Command), Command).
-shell_fragment(run_compare(Repo, System), Command) :-
-    atomic_list_concat(['diff -qr ', Repo, ' ', System, ' >/dev/null'], Command).
 shell_fragment(run_commit_command(Message), Command) :-
     run_commit_command(Message, Command).
 
