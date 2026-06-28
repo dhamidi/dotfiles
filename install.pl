@@ -17,7 +17,7 @@ ensure_installed(Name, _Actions) :-
     report(ok, Name, installed).
 ensure_installed(Name, Actions) :-
     shell_script(Actions, Command),
-    report(run, Name, Command),
+    report(run, action, Command),
     shell(Command, Status),
     (   Status =:= 0,
         check_installed(Name)
@@ -32,7 +32,7 @@ ensure_file(Path, _Actions) :-
     report(ok, Path, present).
 ensure_file(Path, Actions) :-
     shell_script(Actions, Command),
-    report(run, Path, Command),
+    report(run, action, Command),
     shell(Command, Status),
     (   Status =:= 0,
         expand_file_name(Path, [ExpandedPath]),
