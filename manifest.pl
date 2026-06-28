@@ -1,24 +1,8 @@
-file('~/.local/bin/agents', [
-    copy_file('bin/agents', '~/.local/bin/agents'),
-    chmod_exec('~/.local/bin/agents')
-]).
+file('bin/agents', '~/.local/bin/agents', [copy_file, chmod_exec]).
+file('bin/dotfiles', '~/.local/bin/dotfiles', [copy_file, chmod_exec]).
+file('config/AGENTS.md', '~/.config/AGENTS.md', [copy_file]).
+file('agents/skills', '~/.agents/skills', [copy_tree]).
+file('mise/config.toml', '~/.config/mise/config.toml', [copy_file]).
 
-file('~/.config/AGENTS.md', [
-    copy_file('config/AGENTS.md', '~/.config/AGENTS.md')
-]).
-
-file('~/.agents/skills/secret-management/SKILL.md', [
-    copy_tree('agents/skills', '~/.agents/skills')
-]).
-
-file('~/.config/mise/config.toml', [
-    copy_file('mise/config.toml', '~/.config/mise/config.toml')
-]).
-
-installed('agents', [
-    run('~/.local/bin/agents sync')
-]).
-
-installed('mise', [
-    run('mise install -g')
-]).
+installed('agents', [run('~/.local/bin/agents sync')]).
+installed('mise', [run('mise install -g')]).

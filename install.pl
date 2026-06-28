@@ -1,24 +1,59 @@
 :- consult('manifest.pl').
 
 main :-
-    ensure_all_files,
-    ensure_all_installed,
+    install,
     halt(0).
 
+cli :-
+    current_prolog_flag(argv, Args),
+    cli(Args),
+    halt(0).
+
+cli([]) :-
+    install.
+cli([install]) :-
+    install.
+cli([status]) :-
+    print_state.
+cli([diff]) :-
+    run_diff.
+cli([pull]) :-
+    run_pull.
+cli([commit]) :-
+    run_commit('chore: update dotfiles').
+cli([commit, '-m', Message]) :-
+    run_commit(Message).
+cli([commands]) :-
+    print_planned_commands.
+cli([tree]) :-
+    print_desired_tree.
+cli([help]) :-
+    print_help.
+cli(_) :-
+    print_help,
+    halt(1).
+
+install :-
+    ensure_all_files,
+    ensure_all_installed.
+
 ensure_all_files :-
-    forall(file(Path, Actions), ensure_file(Path, Actions)).
+    forall(file(_Repo, System, _Specs), ensure_file(System)).
 
 ensure_all_installed :-
-    forall(installed(Name, Actions), ensure_installed(Name, Actions)).
+    forall(installed(Name, _Actions), ensure_installed(Name)).
 
-desired(file(Path), present) :-
-    file(Path, _Actions).
+desired(file(System), present) :-
+    file(_Repo, System, _Specs).
 desired(installed(Name), present) :-
     installed(Name, _Actions).
 
-actual(file(Path), present) :-
-    file_present(Path), !.
-actual(file(_Path), missing).
+actual(file(System), present) :-
+    managed(Repo, System),
+    same_file_or_tree(Repo, System), !.
+actual(file(System), stale) :-
+    file_present(System), !.
+actual(file(_System), missing).
 actual(installed(Name), present) :-
     check_installed(Name), !.
 actual(installed(_Name), missing).
@@ -30,14 +65,42 @@ state(Target, Desired, Actual) :-
 satisfied(Target) :-
     state(Target, Desired, Desired).
 
-planned_command(file(Path), Command) :-
-    file(Path, Actions),
-    \+ satisfied(file(Path)),
+managed(Repo, System) :-
+    file(Repo, System, _Specs).
+
+install_actions(Repo, System, Actions) :-
+    file(Repo, System, Specs),
+    maplist(install_action(Repo, System), Specs, Actions).
+
+install_action(Repo, System, copy_file, copy_file(Repo, System)).
+install_action(Repo, System, copy_tree, copy_tree(Repo, System)).
+install_action(_Repo, System, chmod_exec, chmod_exec(System)).
+
+pull_actions(Repo, System, [copy_file(System, Repo)]) :-
+    file(Repo, System, Specs),
+    member(copy_file, Specs).
+pull_actions(Repo, System, [copy_tree(System, Repo)]) :-
+    file(Repo, System, Specs),
+    member(copy_tree, Specs).
+
+planned_command(file(System), Command) :-
+    managed(Repo, System),
+    \+ satisfied(file(System)),
+    install_actions(Repo, System, Actions),
     shell_script(Actions, Command).
 planned_command(installed(Name), Command) :-
     installed(Name, Actions),
     \+ satisfied(installed(Name)),
     shell_script(Actions, Command).
+
+pull_command(Repo, System, Command) :-
+    managed(Repo, System),
+    pull_actions(Repo, System, Actions),
+    shell_script(Actions, Command).
+
+diff_command(Repo, System, Command) :-
+    managed(Repo, System),
+    atomic_list_concat(['diff -ruN ', Repo, ' ', System], Command).
 
 desired_file(Path) :-
     desired(file(Path), present).
@@ -54,9 +117,13 @@ present_file(Path) :-
 tree_diff(Path, Status) :-
     state(file(Path), present, Status).
 
+same_file_or_tree(Repo, System) :-
+    shell_script([run_compare(Repo, System)], Command),
+    shell(Command, 0).
+
 file_present(Path) :-
     expand_file_name(Path, [ExpandedPath]),
-    exists_file(ExpandedPath).
+    ( exists_file(ExpandedPath) ; exists_directory(ExpandedPath) ).
 
 print_planned_commands :-
     forall(planned_command(Target, Command),
@@ -68,10 +135,43 @@ print_desired_tree :-
 print_tree_diff :-
     forall(tree_diff(Path, Status), format('~w ~w~n', [Status, Path])).
 
-ensure_installed(Name, _Actions) :-
+print_state :-
+    forall(state(Target, Desired, Actual),
+           format('~w desired=~w actual=~w~n', [Target, Desired, Actual])).
+
+run_diff :-
+    forall(diff_command(_Repo, _System, Command), run_optional(Command)).
+
+run_pull :-
+    forall(pull_command(Repo, System, Command),
+           ( report(run, action, Command),
+             shell(Command, Status),
+             ( Status =:= 0 -> report(ok, Repo, synced_from(System))
+             ; report(fail, Repo, synced_from(System)), halt(1)
+             )
+           )).
+
+run_commit(Message) :-
+    run_pull,
+    shell('git add .', AddStatus),
+    ( AddStatus =:= 0 -> true ; report(fail, git, add), halt(1) ),
+    shell('git diff --cached --quiet', DiffStatus),
+    ( DiffStatus =:= 0 -> report(ok, git, unchanged)
+    ; shell_script([run('git diff --cached'), run_commit_command(Message)], Command),
+      shell(Command, CommitStatus),
+      ( CommitStatus =:= 0 -> report(ok, git, committed)
+      ; report(fail, git, commit), halt(1)
+      )
+    ).
+
+run_commit_command(Message, Command) :-
+    atomic_list_concat(['git commit -m ', '''', Message, ''''], Command).
+
+ensure_installed(Name) :-
     check_installed(Name), !,
     report(ok, Name, installed).
-ensure_installed(Name, Actions) :-
+ensure_installed(Name) :-
+    installed(Name, Actions),
     shell_script(Actions, Command),
     report(run, action, Command),
     shell(Command, Status),
@@ -82,17 +182,19 @@ ensure_installed(Name, Actions) :-
         halt(1)
     ).
 
-ensure_file(Path, _Actions) :-
-    file_present(Path), !,
-    report(ok, Path, present).
-ensure_file(Path, Actions) :-
+ensure_file(System) :-
+    state(file(System), present, present), !,
+    report(ok, System, present).
+ensure_file(System) :-
+    managed(Repo, System),
+    install_actions(Repo, System, Actions),
     shell_script(Actions, Command),
     report(run, action, Command),
     shell(Command, Status),
     (   Status =:= 0,
-        file_present(Path)
-    ->  report(ok, Path, present)
-    ;   report(fail, Path, missing),
+        file_present(System)
+    ->  report(ok, System, present)
+    ;   report(fail, System, missing),
         halt(1)
     ).
 
@@ -109,6 +211,10 @@ shell_fragment(copy_tree(Source, Target), Command) :-
 shell_fragment(chmod_exec(Path), Command) :-
     atomic_list_concat(['chmod +x ', Path], Command).
 shell_fragment(run(Command), Command).
+shell_fragment(run_compare(Repo, System), Command) :-
+    atomic_list_concat(['diff -qr ', Repo, ' ', System, ' >/dev/null'], Command).
+shell_fragment(run_commit_command(Message), Command) :-
+    run_commit_command(Message, Command).
 
 dirname(Path, Dir) :-
     atomic_list_concat(Parts, '/', Path),
@@ -118,6 +224,16 @@ dirname(Path, Dir) :-
 check_installed(Name) :-
     atomic_list_concat(['command -v ', Name, ' >/dev/null 2>&1'], Command),
     shell(Command, 0).
+
+run_optional(Command) :-
+    shell(Command, Status),
+    ( Status =:= 0 ; Status =:= 1 ), !.
+run_optional(Command) :-
+    report(fail, action, Command),
+    halt(1).
+
+print_help :-
+    writeln('usage: dotfiles [install|status|diff|pull|commit|commands|tree|help]').
 
 report(Status, Subject, Detail) :-
     format('~w ~w ~w~n', [Status, Subject, Detail]),

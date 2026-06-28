@@ -1,0 +1,2 @@
+#!/bin/sh
+exec swipl -q -s "$HOME/projects/dotfiles/install.pl" -g cli -t halt -- "$@"

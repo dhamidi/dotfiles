@@ -12,7 +12,19 @@ cd ~/projects/dotfiles
 make
 ```
 
-`make` bootstraps SWI-Prolog if needed, then runs the Prolog installer. The installer copies the managed files into place, runs `agents sync`, and asks mise to install the globally configured tools.
+`make` bootstraps SWI-Prolog if needed, then runs the Prolog installer. The installer copies the managed files into place, installs the `dotfiles` command into `~/.local/bin`, runs `agents sync`, and asks mise to install the globally configured tools.
+
+
+## Using `dotfiles`
+
+After `make`, the repo-managed command is available at `~/.local/bin/dotfiles`:
+
+```sh
+dotfiles status    # show desired vs actual state
+dotfiles diff      # show system changes compared to the repo
+dotfiles pull      # copy managed system files back into the repo
+dotfiles commit    # pull, stage, and commit managed changes
+```
 
 ## Exploring the installer
 
@@ -53,6 +65,7 @@ forall(satisfied(Target), writeln(Target)).
 - `install.pl` — Prolog installer engine
 - `manifest.pl` — declarative install manifest
 - `bin/agents` — helper for managing AGENTS.md files and skills
+- `bin/dotfiles` — Prolog CLI for installing, diffing, pulling, and committing dotfiles
 - `config/AGENTS.md` — global agent guidance
 - `agents/skills/` — global agent skills
 - `mise/config.toml` — global mise tool configuration
