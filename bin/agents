@@ -1,0 +1,387 @@
+#!/usr/bin/env bun
+// agents — manage AGENTS.md guidance files and skills so they are picked up by
+// BOTH Amp (ampcode.com/manual) and Claude Code.
+//
+// Discovery facts this tool bridges:
+//   Guidance files
+//     - Amp  reads: AGENTS.md (cwd + parents, subtrees), ~/.config/AGENTS.md.
+//             Falls back to CLAUDE.md only when no AGENTS.md sits in that dir.
+//     - Claude reads: CLAUDE.md (cwd + parents), ~/.claude/CLAUDE.md. Never AGENTS.md.
+//     => Source of truth is AGENTS.md; CLAUDE.md is a symlink pointing at it.
+//   Skills (a dir containing SKILL.md)
+//     - Both read: .claude/skills/ and ~/.claude/skills/
+//     - Amp also reads: .agents/skills/ and ~/.agents/skills/  (Claude does not)
+//     => Source of truth is .agents/skills/<name>; symlinked into .claude/skills/<name>.
+//
+// Self-contained: no dependencies beyond Bun + node stdlib.
+
+import {
+  mkdirSync, lstatSync, readdirSync, readFileSync,
+  realpathSync, symlinkSync, rmSync, writeFileSync, statSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname, basename, resolve } from "node:path";
+
+const HOME = homedir();
+const CWD = process.cwd();
+
+// ── ANSI helpers ────────────────────────────────────────────────────────────
+const tty = process.stdout.isTTY;
+const c = (n: number) => (s: string) => (tty ? `\x1b[${n}m${s}\x1b[0m` : s);
+const bold = c(1), dim = c(2), red = c(31), green = c(32), yellow = c(33), cyan = c(36);
+const OK = green("✓"), NO = red("✗"), WARN = yellow("!");
+
+// ── canonical locations ─────────────────────────────────────────────────────
+const GLOBAL_AGENTS_MD = join(HOME, ".config", "AGENTS.md");
+const GLOBAL_CLAUDE_MD = join(HOME, ".claude", "CLAUDE.md");
+const GLOBAL_SKILLS_SRC = join(HOME, ".agents", "skills");      // Amp-native, canonical
+const GLOBAL_SKILLS_DST = join(HOME, ".claude", "skills");      // bridged for Claude
+
+const projectAgentsMd = (root = CWD) => join(root, "AGENTS.md");
+const projectClaudeMd = (root = CWD) => join(root, "CLAUDE.md");
+const projectSkillsSrc = (root = CWD) => join(root, ".agents", "skills");
+const projectSkillsDst = (root = CWD) => join(root, ".claude", "skills");
+
+// ── fs utilities ────────────────────────────────────────────────────────────
+function isSymlink(p: string): boolean {
+  try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
+}
+function realOrNull(p: string): string | null {
+  try { return realpathSync(p); } catch { return null; }
+}
+function exists(p: string): boolean {
+  try { lstatSync(p); return true; } catch { return false; }
+}
+function ensureDir(p: string) { mkdirSync(p, { recursive: true }); }
+function linkType(realTarget: string | null): "dir" | "file" {
+  return realTarget && statSync(realTarget).isDirectory() ? "dir" : "file";
+}
+
+// symlink target: relative basename when both live in the same dir, else absolute.
+function linkTargetFor(target: string, linkPath: string): string {
+  return dirname(resolve(target)) === dirname(resolve(linkPath))
+    ? basename(target)
+    : resolve(target);
+}
+
+type LinkResult = "created" | "ok" | "repaired" | "conflict";
+
+// Ensure `linkPath` is a symlink resolving to `target`.
+function ensureSymlink(target: string, linkPath: string, force = false): LinkResult {
+  const wantReal = realOrNull(target);
+  if (exists(linkPath)) {
+    if (isSymlink(linkPath)) {
+      const cur = realOrNull(linkPath);
+      if (cur && wantReal && cur === wantReal) return "ok";
+      if (!force) return "conflict";
+      rmSync(linkPath); // replacing a symlink that points at the wrong place
+      ensureDir(dirname(linkPath));
+      symlinkSync(linkTargetFor(target, linkPath), linkPath, linkType(wantReal));
+      return "repaired";
+    } else {
+      return "conflict"; // a real file/dir already lives here — never clobber silently
+    }
+  }
+  ensureDir(dirname(linkPath));
+  symlinkSync(linkTargetFor(target, linkPath), linkPath, linkType(wantReal));
+  return "created";
+}
+
+// ── guidance (AGENTS.md <-> CLAUDE.md) ──────────────────────────────────────
+// Returns the action taken so callers can print it.
+type Pair = { agents: string; claude: string };
+
+function realFile(p: string): boolean { return exists(p) && !isSymlink(p); }
+
+function bridgeGuidance({ agents, claude }: Pair, force = false): string {
+  const aReal = realFile(agents), cReal = realFile(claude);
+  // The real file is the source of truth; the other path becomes a symlink to it.
+  if (aReal && cReal)
+    return `${WARN} ${yellow("both real files")} — can't merge ${tildify(agents)} & ${tildify(claude)} (edit one, rm the other, re-sync)`;
+  if (aReal) return symLine(ensureSymlink(agents, claude, force), claude, agents);
+  if (cReal) return symLine(ensureSymlink(claude, agents, force), agents, claude);
+  // Neither is a real file.
+  if (!exists(agents) && !exists(claude))
+    return `${dim("·")} ${dim("no guidance file at")} ${tildify(dirname(agents))}`;
+  return `${WARN} ${yellow("dangling symlink")} at ${tildify(dirname(agents))} — no real AGENTS.md/CLAUDE.md to bridge`;
+}
+
+function symLine(r: LinkResult, link: string, target: string): string {
+  if (r === "created") return `${OK} ${green("linked")} ${tildify(link)} → ${tildify(target)}`;
+  if (r === "ok") return `${OK} ${dim("linked")} ${tildify(link)} → ${tildify(target)}`;
+  if (r === "repaired") return `${OK} ${green("repaired")} ${tildify(link)} → ${tildify(target)}`;
+  return `${NO} ${red("conflict")} ${tildify(link)} already exists (use --force)`;
+}
+
+// ── skills ──────────────────────────────────────────────────────────────────
+function listSkillDirs(dir: string): string[] {
+  if (!exists(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() || e.isSymbolicLink())
+    .map((e) => e.name)
+    .filter((name) => exists(join(dir, name, "SKILL.md")))
+    .sort();
+}
+
+function bridgeSkills(src: string, dst: string, force = false): string[] {
+  return listSkillDirs(src).map((name) => {
+    const r = ensureSymlink(join(src, name), join(dst, name), force);
+    const verb = r === "created" ? green("bridged") : r === "repaired" ? green("repaired")
+      : r === "ok" ? dim("bridged") : red("conflict");
+    return `${r === "conflict" ? NO : OK} ${verb} skill ${cyan(name)} → ${tildify(join(dst, name))}`;
+  });
+}
+
+// global + (project unless it resolves to the same dir, e.g. cwd == $HOME)
+function skillScopes(): [string, string, string][] {
+  const scopes: [string, string, string][] = [["global", GLOBAL_SKILLS_SRC, GLOBAL_SKILLS_DST]];
+  if (resolve(projectSkillsSrc()) !== resolve(GLOBAL_SKILLS_SRC))
+    scopes.push(["project", projectSkillsSrc(), projectSkillsDst()]);
+  return scopes;
+}
+
+function tildify(p: string): string {
+  const r = resolve(p);
+  return r.startsWith(HOME) ? "~" + r.slice(HOME.length) : r;
+}
+
+// ── templates ───────────────────────────────────────────────────────────────
+const AGENTS_TEMPLATE = (title: string) => `# ${title}
+
+<!-- Source of truth for agent guidance.
+     Read by Amp as AGENTS.md and by Claude Code via the CLAUDE.md symlink. -->
+
+## Overview
+
+## Conventions
+
+## Commands
+`;
+
+const SKILL_TEMPLATE = (name: string) => `---
+name: ${name}
+description: One line — when should an agent use this skill? Include trigger keywords so it activates at the right time.
+---
+
+# ${name}
+
+What this skill does and how to use it.
+`;
+
+// ── commands ────────────────────────────────────────────────────────────────
+function cmdSync(args: Flags) {
+  const { force } = args;
+  const doGlobal = args.global || (!args.global && !args.project);
+  const doProject = args.project || (!args.global && !args.project);
+
+  if (doGlobal) {
+    console.log(bold("Global"));
+    console.log("  " + bridgeGuidance({ agents: GLOBAL_AGENTS_MD, claude: GLOBAL_CLAUDE_MD }, force));
+    const lines = bridgeSkills(GLOBAL_SKILLS_SRC, GLOBAL_SKILLS_DST, force);
+    if (lines.length) lines.forEach((l) => console.log("  " + l));
+    else console.log("  " + dim("· no skills in ") + tildify(GLOBAL_SKILLS_SRC));
+  }
+  if (doProject) {
+    console.log(bold("\nProject ") + dim(tildify(CWD)));
+    console.log("  " + bridgeGuidance({ agents: projectAgentsMd(), claude: projectClaudeMd() }, force));
+    if (resolve(projectSkillsSrc()) === resolve(GLOBAL_SKILLS_SRC)) {
+      console.log("  " + dim("· project skills dir is the global one (cwd is $HOME)"));
+    } else {
+      const lines = bridgeSkills(projectSkillsSrc(), projectSkillsDst(), force);
+      if (lines.length) lines.forEach((l) => console.log("  " + l));
+      else console.log("  " + dim("· no skills in ") + tildify(projectSkillsSrc()));
+    }
+  }
+}
+
+function visRow(name: string, ampSeen: boolean, claudeSeen: boolean, note = "") {
+  const a = ampSeen ? OK : NO, cl = claudeSeen ? OK : NO;
+  console.log(`  Amp ${a}  Claude ${cl}  ${name}${note ? "  " + dim(note) : ""}`);
+}
+
+function cmdStatus() {
+  console.log(bold("Guidance files"));
+  for (const [label, pair] of [
+    ["global", { agents: GLOBAL_AGENTS_MD, claude: GLOBAL_CLAUDE_MD }],
+    ["project", { agents: projectAgentsMd(), claude: projectClaudeMd() }],
+  ] as [string, Pair][]) {
+    const ampSeen = exists(pair.agents) || realFile(pair.claude); // Amp: AGENTS.md, or CLAUDE.md fallback
+    const claudeSeen = exists(pair.claude);
+    const where = ampSeen || claudeSeen
+      ? tildify(exists(pair.agents) ? pair.agents : pair.claude)
+      : dim("(none)");
+    if (!ampSeen && !claudeSeen) { visRow(`${label}: ${dim("none")}`, false, false); continue; }
+    visRow(`${label}: ${where}`, ampSeen, claudeSeen,
+      realFile(pair.agents) && realFile(pair.claude) ? "two real files — run sync" :
+      (!claudeSeen ? "run sync to bridge CLAUDE.md" : (!ampSeen ? "run sync to bridge AGENTS.md" : "")));
+  }
+
+  console.log(bold("\nSkills"));
+  let any = false;
+  for (const [label, src, dst] of skillScopes()) {
+    const names = new Set([...listSkillDirs(src), ...listSkillDirs(dst)]);
+    for (const name of [...names].sort()) {
+      any = true;
+      const inSrc = listSkillDirs(src).includes(name);   // Amp-native (.agents/skills)
+      const inDst = exists(join(dst, name, "SKILL.md"));  // both read .claude/skills
+      const ampSeen = inSrc || inDst;
+      const claudeSeen = inDst;
+      const note = inSrc && !inDst ? "Amp-only — run sync"
+                 : !inSrc && inDst && !isSymlink(join(dst, name)) ? "in .claude/skills (both see it)"
+                 : "";
+      visRow(`${label}: ${name}`, ampSeen, claudeSeen, note);
+    }
+  }
+  if (!any) console.log("  " + dim("· no skills found"));
+}
+
+function cmdMd(args: Flags) {
+  const title = args.rest[0] || (args.global ? "Global Agent Guidance" : `${basename(CWD)} — Agent Guidance`);
+  const agents = args.global ? GLOBAL_AGENTS_MD : projectAgentsMd();
+  const claude = args.global ? GLOBAL_CLAUDE_MD : projectClaudeMd();
+  if (!exists(agents) && !realFile(claude)) {
+    ensureDir(dirname(agents));
+    writeFileSync(agents, AGENTS_TEMPLATE(title));
+    console.log(`${OK} created ${tildify(agents)}`);
+  } else {
+    console.log(`${dim("·")} ${tildify(agents)} already present`);
+  }
+  console.log("  " + bridgeGuidance({ agents, claude }, args.force));
+  maybeEdit(exists(agents) ? agents : claude, args);
+}
+
+function cmdSkill(args: Flags) {
+  const sub = args.rest[0];
+  if (sub === "rm" || sub === "remove") return skillRemove(args);
+  if (sub === "list" || sub === "ls" || !sub) return cmdList(args);
+  return skillNew(args, sub === "new" ? args.rest[1] : sub);
+}
+
+function skillNew(args: Flags, name?: string) {
+  if (!name) die("usage: agents skill <name> [--project] [--force]");
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name!))
+    die(`skill name must be kebab-case (got "${name}")`);
+  // default scope is global (personal skills); --project for repo-local
+  const src = args.project ? projectSkillsSrc() : GLOBAL_SKILLS_SRC;
+  const dst = args.project ? projectSkillsDst() : GLOBAL_SKILLS_DST;
+  const dir = join(src, name!);
+  const skillFile = join(dir, "SKILL.md");
+  if (exists(skillFile)) {
+    console.log(`${dim("·")} skill ${cyan(name!)} already exists at ${tildify(dir)}`);
+  } else {
+    ensureDir(dir);
+    writeFileSync(skillFile, SKILL_TEMPLATE(name!));
+    console.log(`${OK} created skill ${cyan(name!)} at ${tildify(skillFile)}`);
+  }
+  const r = ensureSymlink(dir, join(dst, name!), args.force);
+  console.log("  " + symLine(r, join(dst, name!), dir));
+  maybeEdit(skillFile, args);
+}
+
+function skillRemove(args: Flags) {
+  const name = args.rest[1];
+  if (!name) die("usage: agents skill rm <name> [--project]");
+  const src = args.project ? projectSkillsSrc() : GLOBAL_SKILLS_SRC;
+  const dst = args.project ? projectSkillsDst() : GLOBAL_SKILLS_DST;
+  const link = join(dst, name);
+  if (isSymlink(link)) { rmSync(link); console.log(`${OK} removed bridge ${tildify(link)}`); }
+  const dir = join(src, name);
+  if (exists(dir)) {
+    rmSync(dir, { recursive: true });
+    console.log(`${OK} removed skill ${tildify(dir)}`);
+  } else {
+    console.log(`${dim("·")} no skill ${cyan(name)} at ${tildify(dir)}`);
+  }
+}
+
+function cmdList(_args: Flags) {
+  for (const [label, src, dst] of skillScopes()) {
+    const names = [...new Set([...listSkillDirs(src), ...listSkillDirs(dst)])].sort();
+    if (!names.length) continue;
+    console.log(bold(`${label} skills`) + dim("  " + tildify(src)));
+    for (const name of names) {
+      const desc = readDescription(join(src, name, "SKILL.md")) ?? readDescription(join(dst, name, "SKILL.md"));
+      console.log(`  ${cyan(name)}${desc ? dim(" — " + desc) : ""}`);
+    }
+  }
+}
+
+function readDescription(skillFile: string): string | null {
+  try {
+    const txt = readFileSync(skillFile, "utf8");
+    const m = txt.match(/^description:\s*(.+)$/m);
+    if (!m) return null;
+    let d = m[1].trim();
+    if (d.length > 90) d = d.slice(0, 87) + "…";
+    return d;
+  } catch { return null; }
+}
+
+function maybeEdit(file: string, args: Flags) {
+  if (!args.edit) return;
+  const editor = process.env.EDITOR || "vi";
+  Bun.spawnSync({ cmd: [editor, file], stdio: ["inherit", "inherit", "inherit"] });
+}
+
+// ── arg parsing ─────────────────────────────────────────────────────────────
+type Flags = {
+  global: boolean; project: boolean; force: boolean; edit: boolean; rest: string[];
+};
+function parse(argv: string[]): { cmd: string; flags: Flags } {
+  const rest: string[] = [];
+  const flags: Flags = { global: false, project: false, force: false, edit: false, rest };
+  let cmd = "";
+  for (const a of argv) {
+    if (a === "-g" || a === "--global") flags.global = true;
+    else if (a === "-p" || a === "--project") flags.project = true;
+    else if (a === "-f" || a === "--force") flags.force = true;
+    else if (a === "-e" || a === "--edit") flags.edit = true;
+    else if (!cmd) cmd = a;
+    else rest.push(a);
+  }
+  return { cmd, flags };
+}
+
+function die(msg: string): never { console.error(red("error: ") + msg); process.exit(1); }
+
+const HELP = `${bold("agents")} — manage AGENTS.md + skills for Amp ${dim("and")} Claude Code
+
+${bold("USAGE")}
+  agents <command> [options]
+
+${bold("COMMANDS")}
+  status                 Show what Amp and Claude can each see ${dim("(default)")}
+  sync                   Create/repair bridge symlinks so both tools see everything
+  md [title]             Create an AGENTS.md (+ CLAUDE.md bridge)
+  skill <name>           Scaffold a skill (+ .claude/skills bridge)
+  skill list             List skills with descriptions
+  skill rm <name>        Delete a skill and its bridge
+  help                   Show this help
+
+${bold("SCOPE")}  ${dim("(md / skill / sync)")}
+  -g, --global           Global: ~/.config/AGENTS.md, ~/.agents/skills ${dim("(default for skills)")}
+  -p, --project          Project: ./AGENTS.md, ./.agents/skills ${dim("(cwd)")}
+  ${dim("sync with no scope flag does both global and project")}
+
+${bold("OPTIONS")}
+  -f, --force            Replace a wrong/conflicting symlink
+  -e, --edit             Open the file in $EDITOR after creating
+
+${bold("HOW IT BRIDGES")}
+  Guidance: AGENTS.md is the source of truth; CLAUDE.md → symlink to it.
+  Skills:   .agents/skills/<name> is canonical; .claude/skills/<name> → symlink.
+  Run ${cyan("agents sync")} anytime to make both tools agree.
+`;
+
+// ── main ────────────────────────────────────────────────────────────────────
+const { cmd, flags } = parse(process.argv.slice(2));
+switch (cmd) {
+  case "":
+  case "status": cmdStatus(); break;
+  case "sync": cmdSync(flags); break;
+  case "md": cmdMd(flags); break;
+  case "skill": cmdSkill(flags); break;
+  case "list": case "ls": cmdList(flags); break;
+  case "help": case "-h": case "--help": console.log(HELP); break;
+  default: console.error(red(`unknown command: ${cmd}\n`)); console.log(HELP); process.exit(1);
+}
