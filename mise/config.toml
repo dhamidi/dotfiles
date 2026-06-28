@@ -1,0 +1,10 @@
+[tools]
+ast-grep = "latest"
+bun = "latest"
+fnox = "latest"
+fzf = "latest"
+lazygit = "latest"
+op = "latest"
+ripgrep = "latest"
+starship = "latest"
+zig = "latest"

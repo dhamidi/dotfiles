@@ -1,11 +1,16 @@
 :- initialization(main, main).
+:- consult('manifest.pl').
 
 main :-
-    ensure_file('bin/agents', 'mkdir -p ~/.local/bin && cp bin/agents ~/.local/bin/agents && chmod +x ~/.local/bin/agents'),
-    ensure_file('config/AGENTS.md', 'mkdir -p ~/.config && cp config/AGENTS.md ~/.config/AGENTS.md'),
-    ensure_file('agents/skills/secret-management/SKILL.md', 'mkdir -p ~/.agents/skills && cp -R agents/skills/. ~/.agents/skills/'),
-    ensure_installed('agents', '~/.local/bin/agents sync'),
+    ensure_all_files,
+    ensure_all_installed,
     halt(0).
+
+ensure_all_files :-
+    forall(file(Path, Command), ensure_file(Path, Command)).
+
+ensure_all_installed :-
+    forall(installed(Name, Command), ensure_installed(Name, Command)).
 
 ensure_installed(Name, _Command) :-
     check_installed(Name), !,
