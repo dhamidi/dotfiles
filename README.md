@@ -40,6 +40,13 @@ present_file(Path).
 tree_diff(Path, Status).
 ```
 
+Collect or print only the targets that are already satisfied:
+
+```prolog
+findall(Target, satisfied(Target), Targets).
+forall(satisfied(Target), writeln(Target)).
+```
+
 ## Contents
 
 - `Makefile` — bootstrap entrypoint; ensures `swipl` is available and runs the installer
