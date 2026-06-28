@@ -11,31 +11,48 @@ ensure_all_files :-
 ensure_all_installed :-
     forall(installed(Name, Actions), ensure_installed(Name, Actions)).
 
-planned_command(Target, Command) :-
-    file(Target, Actions),
+desired(file(Path), present) :-
+    file(Path, _Actions).
+desired(installed(Name), present) :-
+    installed(Name, _Actions).
+
+actual(file(Path), present) :-
+    file_present(Path), !.
+actual(file(_Path), missing).
+actual(installed(Name), present) :-
+    check_installed(Name), !.
+actual(installed(_Name), missing).
+
+state(Target, Desired, Actual) :-
+    desired(Target, Desired),
+    actual(Target, Actual).
+
+satisfied(Target) :-
+    state(Target, Desired, Desired).
+
+planned_command(file(Path), Command) :-
+    file(Path, Actions),
+    \+ satisfied(file(Path)),
     shell_script(Actions, Command).
-planned_command(Name, Command) :-
+planned_command(installed(Name), Command) :-
     installed(Name, Actions),
+    \+ satisfied(installed(Name)),
     shell_script(Actions, Command).
 
 desired_file(Path) :-
-    file(Path, _Actions).
+    desired(file(Path), present).
 
 desired_tree(Paths) :-
     findall(Path, desired_file(Path), Paths).
 
 missing_file(Path) :-
-    desired_file(Path),
-    \+ file_present(Path).
+    state(file(Path), present, missing).
 
 present_file(Path) :-
-    desired_file(Path),
-    file_present(Path).
+    state(file(Path), present, present).
 
-tree_diff(Path, missing) :-
-    missing_file(Path).
-tree_diff(Path, present) :-
-    present_file(Path).
+tree_diff(Path, Status) :-
+    state(file(Path), present, Status).
 
 file_present(Path) :-
     expand_file_name(Path, [ExpandedPath]),

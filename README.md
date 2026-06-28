@@ -25,10 +25,14 @@ swipl -s install.pl
 Useful queries:
 
 ```prolog
-print_planned_commands.  % show the commands the installer would run
+print_planned_commands.  % show commands needed to reach the desired state
 print_desired_tree.      % show the desired installed file tree
 print_tree_diff.         % show present/missing files on this system
 
+desired(Target, DesiredState).
+actual(Target, ActualState).
+state(Target, DesiredState, ActualState).
+satisfied(Target).
 planned_command(Target, Command).
 desired_file(Path).
 missing_file(Path).
