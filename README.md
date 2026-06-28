@@ -16,7 +16,7 @@ make
 
 ## Exploring the installer
 
-Run SWI-Prolog interactively:
+Run SWI-Prolog interactively; this only loads the installer predicates and does not install anything by itself:
 
 ```sh
 swipl -s install.pl

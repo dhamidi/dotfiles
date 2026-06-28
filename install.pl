@@ -1,4 +1,3 @@
-:- initialization(main, main).
 :- consult('manifest.pl').
 
 main :-
