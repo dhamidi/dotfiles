@@ -71,10 +71,20 @@ satisfied(Target) :-
     state(Target, Desired, Desired).
 
 managed(Repo, System) :-
-    file(Repo, System, _Specs).
+    file(RepoPath, System, _Specs),
+    repo_path(RepoPath, Repo).
+
+repo_path(Path, RepoPath) :-
+    repo_dir(RepoDir),
+    directory_file_path(RepoDir, Path, RepoPath).
+
+repo_dir(RepoDir) :-
+    source_file(run_sync(_), SourceFile),
+    file_directory_name(SourceFile, RepoDir).
 
 install_actions(Repo, System, Actions) :-
-    file(Repo, System, Specs),
+    file(RepoPath, System, Specs),
+    repo_path(RepoPath, Repo),
     maplist(install_action(Repo, System), Specs, Actions).
 
 install_action(Repo, System, copy_file, copy_file(Repo, System)).
@@ -82,10 +92,12 @@ install_action(Repo, System, copy_tree, copy_tree(Repo, System)).
 install_action(_Repo, System, chmod_exec, chmod_exec(System)).
 
 pull_actions(Repo, System, [copy_file(System, Repo)]) :-
-    file(Repo, System, Specs),
+    file(RepoPath, System, Specs),
+    repo_path(RepoPath, Repo),
     member(copy_file, Specs).
 pull_actions(Repo, System, [copy_tree(System, Repo)]) :-
-    file(Repo, System, Specs),
+    file(RepoPath, System, Specs),
+    repo_path(RepoPath, Repo),
     member(copy_tree, Specs).
 
 planned_command(file(System), Command) :-
