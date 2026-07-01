@@ -1,4 +1,5 @@
-trusted_config_paths = ["~/projects/**"]
+[settings]
+trusted_config_paths = ["/Users/dhamidi/projects"]
 
 [tools]
 ast-grep = "latest"
