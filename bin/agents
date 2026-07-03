@@ -11,7 +11,9 @@
 //   Skills (a dir containing SKILL.md)
 //     - Both read: .claude/skills/ and ~/.claude/skills/
 //     - Amp also reads: .agents/skills/ and ~/.agents/skills/  (Claude does not)
-//     => Source of truth is .agents/skills/<name>; symlinked into .claude/skills/<name>.
+//     => Source of truth is .agents/skills/<name>. Claude does NOT follow a
+//        directory symlink for skills, so the bridge is a real .claude/skills/<name>
+//        directory whose individual files are symlinked back to the source.
 //
 // Self-contained: no dependencies beyond Bun + node stdlib.
 
@@ -123,10 +125,32 @@ function listSkillDirs(dir: string): string[] {
     .sort();
 }
 
+// Claude does not follow a directory symlink for a skill, so mirror the source
+// tree as real directories with a symlink per file. Returns a single summary
+// LinkResult across every file: conflict wins, then created/repaired, else ok.
+function mirrorSkillFiles(srcDir: string, dstDir: string, force = false): LinkResult {
+  // An old-style directory symlink here must be replaced with a real directory.
+  if (isSymlink(dstDir)) rmSync(dstDir);
+  ensureDir(dstDir);
+  let result: LinkResult = "ok";
+  const merge = (r: LinkResult) => {
+    if (r === "conflict") result = "conflict";
+    else if (result !== "conflict" && (r === "created" || r === "repaired")) result = "created";
+  };
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    const s = join(srcDir, entry.name);
+    const d = join(dstDir, entry.name);
+    const real = realOrNull(s);
+    if (real && statSync(real).isDirectory()) merge(mirrorSkillFiles(s, d, force));
+    else merge(ensureSymlink(s, d, force));
+  }
+  return result;
+}
+
 function bridgeSkills(src: string, dst: string, force = false): string[] {
   return listSkillDirs(src).map((name) => {
-    const r = ensureSymlink(join(src, name), join(dst, name), force);
-    const verb = r === "created" ? green("bridged") : r === "repaired" ? green("repaired")
+    const r = mirrorSkillFiles(join(src, name), join(dst, name), force);
+    const verb = r === "created" ? green("bridged")
       : r === "ok" ? dim("bridged") : red("conflict");
     return `${r === "conflict" ? NO : OK} ${verb} skill ${cyan(name)} → ${tildify(join(dst, name))}`;
   });
@@ -273,7 +297,7 @@ function skillNew(args: Flags, name?: string) {
     writeFileSync(skillFile, SKILL_TEMPLATE(name!));
     console.log(`${OK} created skill ${cyan(name!)} at ${tildify(skillFile)}`);
   }
-  const r = ensureSymlink(dir, join(dst, name!), args.force);
+  const r = mirrorSkillFiles(dir, join(dst, name!), args.force);
   console.log("  " + symLine(r, join(dst, name!), dir));
   maybeEdit(skillFile, args);
 }
@@ -284,7 +308,10 @@ function skillRemove(args: Flags) {
   const src = args.project ? projectSkillsSrc() : GLOBAL_SKILLS_SRC;
   const dst = args.project ? projectSkillsDst() : GLOBAL_SKILLS_DST;
   const link = join(dst, name);
-  if (isSymlink(link)) { rmSync(link); console.log(`${OK} removed bridge ${tildify(link)}`); }
+  // The bridge is a real dir of per-file symlinks (or an old-style dir symlink).
+  // Only remove it if it's actually a bridge — never a real skill authored in dst.
+  const isBridge = isSymlink(link) || isSymlink(join(link, "SKILL.md"));
+  if (isBridge) { rmSync(link, { recursive: true }); console.log(`${OK} removed bridge ${tildify(link)}`); }
   const dir = join(src, name);
   if (exists(dir)) {
     rmSync(dir, { recursive: true });
@@ -369,7 +396,8 @@ ${bold("OPTIONS")}
 
 ${bold("HOW IT BRIDGES")}
   Guidance: AGENTS.md is the source of truth; CLAUDE.md → symlink to it.
-  Skills:   .agents/skills/<name> is canonical; .claude/skills/<name> → symlink.
+  Skills:   .agents/skills/<name> is canonical; .claude/skills/<name> is a real
+            dir whose files are symlinked back (Claude ignores dir symlinks).
   Run ${cyan("agents sync")} anytime to make both tools agree.
 `;
 
