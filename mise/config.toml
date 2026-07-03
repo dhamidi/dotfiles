@@ -5,6 +5,7 @@ trusted_config_paths = ["/Users/dhamidi/projects"]
 ast-grep = "latest"
 bat = "latest"
 bun = "latest"
+cmake = "latest"
 fd = "latest"
 fnox = "latest"
 fzf = "latest"
